@@ -3,15 +3,20 @@ import { getAuth, signInAnonymously, onAuthStateChanged } from "https://www.gsta
 import { getFirestore, collection, onSnapshot, doc, addDoc, serverTimestamp } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore.js";
 import { getFunctions, httpsCallable } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-functions.js";
 
+// --- グローバル変数 (Firebase関連のみ) ---
 const FIREBASE_CONFIG = {
-  apiKey: "AIzaSyDAYv5Qm0bfqbHhCLeNp6zjKMty2y7xIIY",
-  authDomain: "the-hunt-49493.firebaseapp.com",
-  projectId: "the-hunt-49493",
-  storageBucket: "the-hunt-49493.firebasestorage.app",
-  messagingSenderId: "465769826017",
-  appId: "1:465769826017:web:74ad7e62f3ab139cb359a0",
-  measurementId: "G-J1KGFE15XP"
+    apiKey: "AIzaSyDAYv5Qm0bfqbHhCLeNp6zjKMty2y7xIIY",
+    authDomain: "the-hunt-49493.firebaseapp.com",
+    projectId: "the-hunt-49493",
+    storageBucket: "the-hunt-49493.firebasestorage.app",
+    messagingSenderId: "465769826017",
+    appId: "1:465769826017:web:74ad7e62f3ab139cb359a0",
+    measurementId: "G-J1KGFE15XP"
 };
+
+let userId = localStorage.getItem('user_uuid') || null;
+// 他のファイルで定義・初期化される変数: baseMobData, globalMobData, progressUpdateInterval, displayStatus, fetchBaseMobData, mergeMobStatusData, mergeMobLocationsData, updateProgressBars, sortAndRedistribute, closeReportModal
+// このファイルで依存するが未定義のDOMElement: DOMElements (modalStatus)
 
 let app = initializeApp(FIREBASE_CONFIG);
 let db = getFirestore(app);
@@ -21,50 +26,35 @@ let functions = getFunctions(app, "asia-northeast2");
 const callUpdateCrushStatus = httpsCallable(functions, 'crushStatusUpdater');
 
 let unsubscribeListeners = [];
+// --- /グローバル変数 ---
 
-const mergeMobStatusData = (mobStatusDataMap) => {
-    const newData = new Map();
-    // (中略: 機能群2のデータ処理ロジックに依存するため、ここではFirebaseからのデータ受信後の呼び出しのみ残す)
-    Object.values(mobStatusDataMap).forEach(docData => {
-        Object.entries(docData).forEach(([mobId, mobData]) => {
-            const mobNo = parseInt(mobId);
-            newData.set(mobNo, {
-                last_kill_time: mobData.last_kill_time?.seconds || 0,
-                prev_kill_time: mobData.prev_kill_time?.seconds || 0,
-                last_kill_memo: mobData.last_kill_memo || ''
+
+// --- 認証機能 ---
+export const setupAuthentication = (fetchBaseMobData, startRealtimeListeners, displayStatus) => {
+    onAuthStateChanged(auth, (user) => {
+        if (user) {
+            userId = user.uid;
+            localStorage.setItem('user_uuid', userId);
+            displayStatus(`ユーザー認証成功: ${userId.substring(0, 8)}...`, 'success');
+            // baseMobData の状態チェックを外部関数に依存させる
+            // NOTE: fetchBaseMobData はグローバルな baseMobData を参照する前提
+            if (window.baseMobData && window.baseMobData.length > 0) {
+                startRealtimeListeners();
+            } else {
+                fetchBaseMobData().then(() => startRealtimeListeners());
+            }
+        } else {
+            signInAnonymously(auth).catch((error) => {
+                displayStatus(`認証エラー: ${error.message}`, 'error');
             });
-        });
-    });
-    globalMobData = globalMobData.map(mob => {
-        let mergedMob = { ...mob };
-        if (newData.has(mob.No)) {
-            const dynamicData = newData.get(mob.No);
-            mergedMob.last_kill_time = dynamicData.last_kill_time;
-            mergedMob.prev_kill_time = dynamicData.prev_kill_time;
-            mergedMob.last_kill_memo = dynamicData.last_kill_memo;
         }
-        mergedMob.repopInfo = calculateRepop(mergedMob);
-        return mergedMob;
     });
-    sortAndRedistribute();
 };
 
-const mergeMobLocationsData = (locationsMap) => {
-    // (中略: 機能群2のデータ処理ロジックに依存するため、ここではFirebaseからのデータ受信後の呼び出しのみ残す)
-    globalMobData = globalMobData.map(mob => {
-        let mergedMob = { ...mob };
-        const dynamicData = locationsMap[mob.No];
-        if (mob.Rank === 'S' && dynamicData) {
-            mergedMob.spawn_cull_status = dynamicData.points;
-        }
-        mergedMob.repopInfo = calculateRepop(mergedMob);
-        return mergedMob;
-    });
-    sortAndRedistribute();
-};
-
-const startRealtimeListeners = () => {
-    clearInterval(progressUpdateInterval);
+// --- 受信機能 (リアルタイムリスナー) ---
+export const startRealtimeListeners = (mergeMobStatusData, mergeMobLocationsData, updateProgressBars, displayStatus) => {
+    // 依存するグローバル変数: progressUpdateInterval
+    if (window.progressUpdateInterval) clearInterval(window.progressUpdateInterval);
 
     unsubscribeListeners.forEach(unsub => unsub());
     unsubscribeListeners = [];
@@ -92,6 +82,7 @@ const startRealtimeListeners = () => {
         snapshot.forEach(doc => {
             const data = doc.data();
             const mobNo = parseInt(doc.id);
+
             locationsMap[mobNo] = {
                 points: data.points || {}
             };
@@ -103,29 +94,11 @@ const startRealtimeListeners = () => {
     });
     unsubscribeListeners.push(unsubscribeLocations);
 
-    progressUpdateInterval = setInterval(updateProgressBars, 10000);
+    window.progressUpdateInterval = setInterval(updateProgressBars, 10000);
 };
 
-const setupAuthentication = () => {
-    onAuthStateChanged(auth, (user) => {
-        if (user) {
-            userId = user.uid;
-            localStorage.setItem('user_uuid', userId);
-            displayStatus(`ユーザー認証成功: ${userId.substring(0, 8)}...`, 'success');
-            if (baseMobData.length > 0) {
-                startRealtimeListeners();
-            } else {
-                fetchBaseMobData().then(() => startRealtimeListeners());
-            }
-        } else {
-            signInAnonymously(auth).catch((error) => {
-                displayStatus(`認証エラー: ${error.message}`, 'error');
-            });
-        }
-    });
-};
-
-const toggleCrushStatus = async (mobNo, locationId, isCurrentlyCulled) => {
+// --- 送信機能 (報告) ---
+export const toggleCrushStatus = async (mobNo, locationId, isCurrentlyCulled, displayStatus, globalMobData) => {
     if (!userId) {
         displayStatus("認証が完了していません。", 'error');
         return;
@@ -141,7 +114,7 @@ const toggleCrushStatus = async (mobNo, locationId, isCurrentlyCulled) => {
         const result = await callUpdateCrushStatus({
             mob_id: mobNo.toString(),
             point_id: locationId,
-            type: action === 'crush' ? 'add' : 'remove', // Cloud Functionの引数名に合わせる
+            type: action === 'crush' ? 'add' : 'remove',
             userId: userId
         });
 
@@ -155,7 +128,10 @@ const toggleCrushStatus = async (mobNo, locationId, isCurrentlyCulled) => {
     }
 };
 
-const submitReport = async (mobNo, timeISO, memo) => {
+export const submitReport = async (mobNo, timeISO, memo, globalMobData, closeReportModal, displayStatus) => {
+    // 依存するDOMElement: DOMElements.modalStatus (仮に引数で渡すか、内部でアクセスする)
+    const DOMElements = window.DOMElements; // 仮にグローバルなDOM要素に依存
+    
     if (!userId) {
         displayStatus("認証が完了していません。ページをリロードしてください。", 'error');
         return;
@@ -173,8 +149,7 @@ const submitReport = async (mobNo, timeISO, memo) => {
         return;
     }
 
-    // DOMElements と displayStatus の依存があるため、UI操作部分はここでは仮に残す
-    // DOMElements.modalStatus.textContent = '送信中...'; 
+    DOMElements.modalStatus.textContent = '送信中...';
     displayStatus(`${mob.Name} 討伐時間報告中...`);
 
     try {
@@ -184,13 +159,16 @@ const submitReport = async (mobNo, timeISO, memo) => {
             reporter_uid: userId,
             memo: memo,
             repop_seconds: mob.REPOP_s
+            // mob.Rank の送信は元のコードで削除済み
         });
 
-        // closeReportModal(); // 機能群4のUI機能
+        closeReportModal();
         displayStatus("報告が完了しました。データ反映を待っています。", 'success');
     } catch (error) {
         console.error("レポート送信エラー:", error);
-        // DOMElements.modalStatus.textContent = "送信エラー: " + (error.message || "通信失敗"); // 機能群4のUI機能
+        DOMElements.modalStatus.textContent = "送信エラー: " + (error.message || "通信失敗");
         displayStatus(`LKT報告エラー: ${error.message || "通信失敗"}`, 'error');
     }
 };
+
+// NOTE: グローバル変数の window への登録は、統合ファイルで行う前提とします。
