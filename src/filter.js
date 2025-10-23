@@ -3,7 +3,6 @@
 import { state, getState, EXPANSION_MAP } from "./store.js";
 import { DOM, FILTER_TO_DATA_RANK_MAP } from "./uiShared.js";
 import { debounce } from "./utils.js";
-import { filterAndRender } from "./uiRender.js";
 
 const renderRankTabs = () => {
     const state = getState();
