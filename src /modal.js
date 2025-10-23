@@ -1,79 +1,63 @@
-// modal.js
-import { DOM } from "./uiShared.js";
-import { displayStatus, toJstAdjustedIsoString } from "./utils.js";
-import { addDoc, collection } from "https://www.gstatic.com/firebasejs/9.6.1/firebase-firestore.js";
-import { db } from "./firebase.js";
-import { getState } from "./store.js";
+// store.js
+const EXPANSION_MAP = { 1: "新生", 2: "蒼天", 3: "紅蓮", 4: "漆黒", 5: "暁月", 6: "黄金" };
 
-function toLocalIsoString(date) {
-  const pad = n => String(n).padStart(2, "0");
-  return `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}T${pad(date.getHours())}:${pad(date.getMinutes())}`;
-}
-
-// モーダルを開く
-function openReportModal(mobNo) {
-  const mob = getState().mobs.find(m => m.No === mobNo);
-  if (!mob) return;
-
-  const iso = toLocalIsoString(new Date()); // JST補正ではなくローカル時刻をそのまま
-  DOM.reportForm.dataset.mobNo = String(mobNo);
-  DOM.modalMobName.textContent = `対象: ${mob.Name} (${mob.Area})`;
-  DOM.modalTimeInput.value = iso;
-  DOM.modalMemoInput.value = mob.last_kill_memo || "";
-  DOM.modalMemoInput.placeholder = `任意`;
-  DOM.modalStatus.textContent = "";
-  DOM.reportModal.classList.remove("hidden");
-  DOM.reportModal.classList.add("flex");
-}
-
-// モーダルを閉じる
-function closeReportModal() {
-  DOM.reportModal.classList.add("hidden");
-  DOM.modalTimeInput.value = "";
-  DOM.modalMemoInput.value = "";
-}
-
-async function submitReport(mobNo, timeISO, memo) {
-  const DOM = getDOMElements();
-  const { userId, mobs } = getState();
-  if (!userId) {
-    displayStatus("認証が完了していません。ページをリロードしてください。", "error");
-    return;
-  }
-  const mob = mobs.find(m => m.No === mobNo);
-  if (!mob) {
-    displayStatus("モブデータが見つかりません。", "error");
-    return;
-  }
-  const killTimeDate = new Date(timeISO);
-  if (isNaN(killTimeDate)) {
-    displayStatus("時刻形式が不正です。", "error");
-    return;
-  }
-  DOM.modalStatus.textContent = "送信中...";
-  displayStatus(`${mob.Name} 討伐時間報告中...`);
-  try {
-    await addDoc(collection(db, "reports"), {
-      mob_id: mobNo.toString(),
-      kill_time: killTimeDate,
-      reporter_uid: userId,
-      memo,
-      repop_seconds: mob.REPOP_s
-    });
-    closeReportModal();
-    displayStatus("報告が完了しました。データ反映を待っています。", "success");
-  } catch (err) {
-    DOM.modalStatus.textContent = `送信エラー: ${err.message || "通信失敗"}`;
-    displayStatus(`LKT報告エラー: ${err.message || "通信失敗"}`, "error");
-  }
-}
-
-export const DOMElements = {
-  reportSubmitBtn: document.getElementById("report-submit"),
-  reportModal: document.getElementById("report-modal"),
-  reportTimeInput: document.getElementById("report-time"),
-  reportMemoInput: document.getElementById("report-memo"),
-  mobList: document.getElementById("mob-list")
+const state = {
+  userId: localStorage.getItem("user_uuid") || null,
+  baseMobData: [],
+  mobs: [],
+  filter: JSON.parse(localStorage.getItem("huntFilterState")) || {
+    rank: "ALL",
+    areaSets: {
+      S: new Set(),
+      A: new Set(),
+      F: new Set(),
+      ALL: new Set()
+    }
+  },
+  openMobCardNo: localStorage.getItem("openMobCardNo")
+    ? parseInt(localStorage.getItem("openMobCardNo"), 10)
+    : null
 };
 
-export { openReportModal, closeReportModal, submitReport, toJstAdjustedIsoString };
+// Set復元
+for (const k in state.filter.areaSets) {
+  const v = state.filter.areaSets[k];
+  if (Array.isArray(v)) state.filter.areaSets[k] = new Set(v);
+  else if (!(v instanceof Set)) state.filter.areaSets[k] = new Set();
+}
+
+const getState = () => state;
+const getMobByNo = no => state.mobs.find(m => m.No === no);
+
+function setUserId(uid) {
+  state.userId = uid;
+  localStorage.setItem("user_uuid", uid);
+}
+
+function setBaseMobData(data) {
+  state.baseMobData = data;
+}
+
+function setMobs(data) {
+  state.mobs = data;
+}
+
+function setFilter(partial) {
+  state.filter = { ...state.filter, ...partial };
+  const serialized = {
+    ...state.filter,
+    areaSets: Object.keys(state.filter.areaSets).reduce((acc, key) => {
+      const v = state.filter.areaSets[key];
+      acc[key] = v instanceof Set ? Array.from(v) : v;
+      return acc;
+    }, {})
+  };
+  localStorage.setItem("huntFilterState", JSON.stringify(serialized));
+}
+
+function setOpenMobCardNo(no) {
+  state.openMobCardNo = no;
+  localStorage.setItem("openMobCardNo", no ?? "");
+}
+
+export { state, EXPANSION_MAP, getState, getMobByNo, setUserId, setBaseMobData, setMobs, setFilter, setOpenMobCardNo };
